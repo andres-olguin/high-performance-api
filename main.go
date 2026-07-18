@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // BatchRequest define la estructura de la peticion de entrada con un lote de tareas
@@ -17,29 +18,43 @@ type BatchRequest struct {
 
 // TaskResult define la estructura del resultado de cada tarea individual procesada
 type TaskResult struct {
-	Task   string `json:"task"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-	Time   string `json:"time_taken"`
+	ID     bson.ObjectID `json:"id" bson:"_id"`
+	Task   string        `json:"task" bson:"task"`
+	Status string        `json:"status" bson:"status"`
+	Error  string        `json:"error,omitempty" bson:"error,omitempty"`
+	Time   string        `json:"time_taken" bson:"time_taken"`
 }
 
-// processTask simula una tarea pesada de procesamiento de forma asincrona con manejo de errores
+// saveToMongoSimulated simula de forma asincrona la insercion del documento en una coleccion de MongoDB
+func saveToMongoSimulated(result TaskResult) {
+	// Simulamos el retraso de red de una insercion real en MongoDB
+	time.Sleep(30 * time.Millisecond)
+	fmt.Printf("[MongoDB] Documento guardado exitosamente - ID: %s | Tarea: %s\n", result.ID.Hex(), result.Task)
+}
+
+// processTask simula una tarea pesada de procesamiento asincrono con manejo de errores y persistencia
 func processTask(taskName string, ch chan<- TaskResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	startTime := time.Now()
+	taskID := bson.NewObjectID() // Generamos un ID unico de MongoDB para el registro
 
 	// Simulamos una validacion: si la tarea incluye la palabra "error", simulamos un fallo
 	if strings.Contains(strings.ToLower(taskName), "error") {
-		time.Sleep(200 * time.Millisecond) // Tiempo antes de fallar
+		time.Sleep(200 * time.Millisecond)
 		duration := time.Since(startTime)
 
-		ch <- TaskResult{
+		result := TaskResult{
+			ID:     taskID,
 			Task:   taskName,
 			Status: "Failed",
 			Error:  "Error crítico: No se pudo procesar la tarea solicitada",
 			Time:   fmt.Sprintf("%v", duration),
 		}
+
+		// Guardamos el log del fallo de forma asincrona en la BD
+		go saveToMongoSimulated(result)
+		ch <- result
 		return
 	}
 
@@ -47,12 +62,16 @@ func processTask(taskName string, ch chan<- TaskResult, wg *sync.WaitGroup) {
 	time.Sleep(500 * time.Millisecond)
 	duration := time.Since(startTime)
 
-	// Enviamos el resultado exitoso al canal
-	ch <- TaskResult{
+	result := TaskResult{
+		ID:     taskID,
 		Task:   taskName,
 		Status: "Completed",
 		Time:   fmt.Sprintf("%v", duration),
 	}
+
+	// Guardamos el registro exitoso de forma asincrona en la BD
+	go saveToMongoSimulated(result)
+	ch <- result
 }
 
 func main() {
@@ -103,7 +122,7 @@ func main() {
 
 		totalDuration := time.Since(totalStart)
 
-		// Retornamos las respuestas con las estadisticas detalladas
+		// Retornamos las respuestas con las estadisticas y los IDs generados de la BD
 		c.JSON(http.StatusOK, gin.H{
 			"total_tasks": numTasks,
 			"successful":  successCount,
